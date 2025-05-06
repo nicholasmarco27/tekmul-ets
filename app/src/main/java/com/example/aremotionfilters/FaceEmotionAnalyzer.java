@@ -1,4 +1,4 @@
-package com.example.aremotionfilters; // Replace with your actual package name
+package com.example.aremotionfilters; // Ganti dengan nama paket Anda yang sebenarnya
 
 import android.annotation.SuppressLint;
 import android.graphics.Rect;
@@ -27,22 +27,25 @@ public class FaceEmotionAnalyzer implements ImageAnalysis.Analyzer {
     private final FaceOverlayView faceOverlayView;
     private final boolean isFrontCamera;
 
-    // Thresholds for classification
-    private static final float SMILING_THRESHOLD = 0.7f;
-    private static final float EYE_CLOSED_THRESHOLD = 0.3f; // If open prob is less than this
+    // Ambang batas untuk klasifikasi
+    private static final float SMILING_THRESHOLD = 0.7f; // Probabilitas di atas ini dianggap tersenyum
+    private static final float EYE_OPEN_THRESHOLD = 0.6f; // Probabilitas mata terbuka di atas ini, dianggap terbuka
+    private static final float EYE_CLOSED_THRESHOLD = 0.4f; // Probabilitas mata terbuka di bawah ini, dianggap tertutup
 
     public FaceEmotionAnalyzer(FaceOverlayView overlayView, boolean isFrontCamera) {
         this.faceOverlayView = overlayView;
         this.isFrontCamera = isFrontCamera;
 
-        // High-accuracy landmark detection and face classification
+        // Konfigurasi FaceDetector
+        // Mode performa cepat, klasifikasi untuk senyum dan mata terbuka/tertutup diaktifkan.
+        // Landmark dan kontur tidak diaktifkan untuk menjaga kesederhanaan dan kecepatan.
         FaceDetectorOptions options =
                 new FaceDetectorOptions.Builder()
                         .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_FAST)
-                        .setLandmarkMode(FaceDetectorOptions.LANDMARK_MODE_NONE) // No landmarks needed for this simple version
-                        .setClassificationMode(FaceDetectorOptions.CLASSIFICATION_MODE_ALL) // Detect smiling and eye open
+                        .setLandmarkMode(FaceDetectorOptions.LANDMARK_MODE_NONE)
+                        .setClassificationMode(FaceDetectorOptions.CLASSIFICATION_MODE_ALL)
                         .setContourMode(FaceDetectorOptions.CONTOUR_MODE_NONE)
-                        .setMinFaceSize(0.15f) // Detect faces that are at least 15% of the image
+                        .setMinFaceSize(0.15f) // Deteksi wajah yang ukurannya minimal 15% dari gambar
                         .build();
 
         detector = FaceDetection.getClient(options);
@@ -53,6 +56,7 @@ public class FaceEmotionAnalyzer implements ImageAnalysis.Analyzer {
         @SuppressLint("UnsafeOptInUsageError")
         Image mediaImage = imageProxy.getImage();
         if (mediaImage != null) {
+            // Membuat InputImage dari mediaImage untuk diproses oleh ML Kit
             InputImage image = InputImage.fromMediaImage(mediaImage, imageProxy.getImageInfo().getRotationDegrees());
 
             detector.process(image)
@@ -62,37 +66,55 @@ public class FaceEmotionAnalyzer implements ImageAnalysis.Analyzer {
                                 public void onSuccess(List<Face> faces) {
                                     List<FaceData> faceDataList = new ArrayList<>();
                                     for (Face face : faces) {
-                                        Rect boundingBox = face.getBoundingBox();
-                                        String emotion = "NEUTRAL";
+                                        Rect boundingBox = face.getBoundingBox(); // Kotak pembatas wajah
+                                        String emotion = FaceData.EMOTION_NEUTRAL; // Emosi default
 
-                                        // Check for smiling
-                                        if (face.getSmilingProbability() != null && face.getSmilingProbability() > SMILING_THRESHOLD) {
-                                            emotion = "SMILING";
-                                        }
-                                        // Check for eyes closed (both)
-                                        else if (face.getLeftEyeOpenProbability() != null && face.getLeftEyeOpenProbability() < EYE_CLOSED_THRESHOLD &&
-                                                face.getRightEyeOpenProbability() != null && face.getRightEyeOpenProbability() < EYE_CLOSED_THRESHOLD) {
-                                            emotion = "EYES_CLOSED";
-                                        }
-                                        // Add more conditions if needed (e.g., only one eye closed)
+                                        // Dapatkan probabilitas dari ML Kit
+                                        Float leftEyeOpenProb = face.getLeftEyeOpenProbability();
+                                        Float rightEyeOpenProb = face.getRightEyeOpenProbability();
+                                        Float smilingProb = face.getSmilingProbability();
 
-                                        float headEulerAngleZ = face.getHeadEulerAngleZ(); // Get Z rotation for effect orientation
+                                        // Tentukan status berdasarkan probabilitas dan ambang batas
+                                        boolean isSmiling = (smilingProb != null && smilingProb > SMILING_THRESHOLD);
+                                        boolean isLeftEyeLikelyOpen = (leftEyeOpenProb != null && leftEyeOpenProb > EYE_OPEN_THRESHOLD);
+                                        boolean isLeftEyeLikelyClosed = (leftEyeOpenProb != null && leftEyeOpenProb < EYE_CLOSED_THRESHOLD);
+                                        boolean isRightEyeLikelyOpen = (rightEyeOpenProb != null && rightEyeOpenProb > EYE_OPEN_THRESHOLD);
+                                        boolean isRightEyeLikelyClosed = (rightEyeOpenProb != null && rightEyeOpenProb < EYE_CLOSED_THRESHOLD);
+
+                                        // Logika untuk menentukan emosi
+                                        // Prioritas: Senyum > Kedua Mata Tertutup > Kedip Kiri > Kedip Kanan > Netral
+                                        if (isSmiling) {
+                                            emotion = FaceData.EMOTION_SMILING;
+                                        } else if (isLeftEyeLikelyClosed && isRightEyeLikelyClosed) {
+                                            // Jika tidak tersenyum, dan kedua mata kemungkinan tertutup
+                                            emotion = FaceData.EMOTION_EYES_CLOSED;
+                                        } else if (isLeftEyeLikelyClosed && isRightEyeLikelyOpen) {
+                                            // Jika tidak tersenyum, mata kiri tertutup dan mata kanan terbuka
+                                            emotion = FaceData.EMOTION_LEFT_WINK;
+                                        } else if (isRightEyeLikelyClosed && isLeftEyeLikelyOpen) {
+                                            // Jika tidak tersenyum, mata kanan tertutup dan mata kiri terbuka
+                                            emotion = FaceData.EMOTION_RIGHT_WINK;
+                                        }
+                                        // Jika tidak ada kondisi di atas, emosi tetap NEUTRAL
+
+                                        float headEulerAngleZ = face.getHeadEulerAngleZ(); // Dapatkan rotasi Z untuk orientasi efek
                                         faceDataList.add(new FaceData(boundingBox, emotion, headEulerAngleZ));
                                     }
+                                    // Perbarui FaceOverlayView dengan data wajah yang baru dideteksi
                                     faceOverlayView.updateFaces(faceDataList, image.getWidth(), image.getHeight(), isFrontCamera);
-                                    imageProxy.close();
+                                    imageProxy.close(); // Penting untuk menutup ImageProxy setelah selesai
                                 }
                             })
                     .addOnFailureListener(
                             new OnFailureListener() {
                                 @Override
                                 public void onFailure(@NonNull Exception e) {
-                                    Log.e(TAG, "Face detection failed: " + e.getMessage());
-                                    imageProxy.close();
+                                    Log.e(TAG, "Deteksi wajah gagal: " + e.getMessage());
+                                    imageProxy.close(); // Tutup ImageProxy jika terjadi kegagalan
                                 }
                             });
         } else {
-            imageProxy.close(); // Make sure to close the proxy if mediaImage is null
+            imageProxy.close(); // Pastikan untuk menutup proxy jika mediaImage null
         }
     }
 }

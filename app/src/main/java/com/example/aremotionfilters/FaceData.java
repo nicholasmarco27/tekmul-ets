@@ -4,8 +4,16 @@ import android.graphics.Rect;
 
 public class FaceData {
     private final Rect boundingBox;
-    private final String emotion; // e.g., "SMILING", "EYES_CLOSED", "NEUTRAL"
-    private final float headEulerAngleZ; // For orientation of the effect
+    private final String emotion; // Misalnya "SMILING", "EYES_CLOSED", "NEUTRAL", "LEFT_WINK", "RIGHT_WINK"
+    private final float headEulerAngleZ; // Untuk orientasi efek
+
+    // Konstanta untuk String emosi agar konsisten
+    public static final String EMOTION_SMILING = "SMILING";
+    public static final String EMOTION_EYES_CLOSED = "EYES_CLOSED";
+    public static final String EMOTION_NEUTRAL = "NEUTRAL";
+    public static final String EMOTION_LEFT_WINK = "LEFT_WINK";
+    public static final String EMOTION_RIGHT_WINK = "RIGHT_WINK";
+
 
     public FaceData(Rect boundingBox, String emotion, float headEulerAngleZ) {
         this.boundingBox = boundingBox;
@@ -25,3 +33,4 @@ public class FaceData {
         return headEulerAngleZ;
     }
 }
+
