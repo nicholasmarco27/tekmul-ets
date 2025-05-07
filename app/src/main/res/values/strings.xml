@@ -1,3 +1,13 @@
 <resources>
-    <string name="app_name">aremotionfilters</string>
+    <string name="app_name">AREmotionFilters</string>
+    <string name="take_picture_count">Take Picture (%1$d/%2$d)</string>
+    <string name="clear_photostrip">Clear Photostrip</string>
+    <string name="photostrip_created_toast">Photostrip created!</string>
+    <string name="photo_capture_failed_toast">Photo capture failed: %s</string>
+    <string name="failed_to_process_image_toast">Failed to process image.</string>
+    <string name="camera_not_ready_toast">Cannot take picture, camera not ready.</string>
+    <string name="error_starting_camera_toast">Error starting camera</string>
+    <string name="could_not_bind_camera_use_cases_toast">Could not bind camera use cases.</string>
+    <string name="permissions_not_granted_toast">Permissions not granted by the user.</string>
+
 </resources>

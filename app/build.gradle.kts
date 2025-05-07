@@ -59,6 +59,8 @@ dependencies {
 
     // ML Kit Face Detection
     implementation("com.google.android.gms:play-services-mlkit-face-detection:$mlkitFaceDetectionVersion")
+    // ML Kit Pose Detection
+    implementation ("com.google.mlkit:pose-detection-accurate:18.0.0-beta1") // Atau versi stabil terbaru jika tersedia
 
     // For easier permission handling (optional, but good practice)
     implementation("androidx.activity:activity-ktx:$activityKtxVersion")
