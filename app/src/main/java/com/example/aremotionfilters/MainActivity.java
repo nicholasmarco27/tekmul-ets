@@ -2,23 +2,24 @@ package com.example.aremotionfilters; // Replace with your actual package name
 
 import android.Manifest;
 import android.annotation.SuppressLint;
-// import android.content.ContentValues; // Not used in this version for saving
+import android.content.ContentValues;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Matrix;
-// import android.media.Image; // Not directly used, ImageProxy is
-// import android.os.Build; // Not directly used
+import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
-// import android.provider.MediaStore; // Not used in this version for saving
+import android.os.Environment;
+import android.provider.MediaStore;
 import android.util.Log;
 import android.util.Size;
 import android.view.View;
 import android.widget.Button;
 import android.widget.ImageView;
-import android.widget.LinearLayout;
+// import android.widget.LinearLayout; // Not directly referenced after binding
 import android.widget.Toast;
 
 import androidx.annotation.NonNull;
@@ -38,10 +39,14 @@ import androidx.lifecycle.LifecycleOwner;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.example.aremotionfilters.databinding.ActivityMainBinding;
 
-// import java.io.OutputStream; // Not used in this version for saving
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.OutputStream;
 import java.nio.ByteBuffer;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.ExecutorService;
@@ -51,10 +56,20 @@ public class MainActivity extends AppCompatActivity {
 
     private static final String TAG = "MainActivity";
     private static final int REQUEST_CODE_PERMISSIONS = 10;
-    private static final String[] REQUIRED_PERMISSIONS = new String[]{Manifest.permission.CAMERA};
-    private static final String FILENAME_FORMAT = "yyyy-MM-dd-HH-mm-ss-SSS"; // Can be used if saving files
-    private static final int MAX_PHOTOS = 4;
+    private static final int REQUEST_CODE_STORAGE_PERMISSION = 11;
 
+    private static String[] REQUIRED_PERMISSIONS;
+
+    static {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            REQUIRED_PERMISSIONS = new String[]{Manifest.permission.CAMERA};
+        } else {
+            REQUIRED_PERMISSIONS = new String[]{Manifest.permission.CAMERA, Manifest.permission.WRITE_EXTERNAL_STORAGE};
+        }
+    }
+
+    private static final String FILENAME_FORMAT = "yyyyMMdd_HHmmss_SSS";
+    private static final int MAX_PHOTOS = 4;
 
     private PreviewView previewView;
     private FaceOverlayView faceOverlayView;
@@ -66,11 +81,12 @@ public class MainActivity extends AppCompatActivity {
 
     private Button captureButton;
     private ImageView photoStripImageView;
-    // private LinearLayout thumbnailContainer; // Not directly used after initialization
+    private Button downloadButton;
     private ImageView[] thumbnailImageViews = new ImageView[MAX_PHOTOS];
 
     private ImageCapture imageCapture;
     private List<Bitmap> capturedImages = new ArrayList<>();
+    private Bitmap currentPhotoStripBitmap;
 
 
     @Override
@@ -81,10 +97,9 @@ public class MainActivity extends AppCompatActivity {
 
         previewView = binding.previewView;
         faceOverlayView = binding.faceOverlayView;
-
         captureButton = binding.captureButton;
         photoStripImageView = binding.photoStripImageView;
-        // thumbnailContainer = binding.thumbnailContainer; // Assignment not strictly needed here
+        downloadButton = binding.downloadButton;
         thumbnailImageViews[0] = binding.thumbnail1;
         thumbnailImageViews[1] = binding.thumbnail2;
         thumbnailImageViews[2] = binding.thumbnail3;
@@ -92,19 +107,19 @@ public class MainActivity extends AppCompatActivity {
 
         cameraExecutor = Executors.newSingleThreadExecutor();
 
-        if (allPermissionsGranted()) {
+        if (allRequiredPermissionsGranted()) {
             startCamera();
         } else {
             ActivityCompat.requestPermissions(this, REQUIRED_PERMISSIONS, REQUEST_CODE_PERMISSIONS);
         }
 
         captureButton.setOnClickListener(v -> takePhoto());
+        downloadButton.setOnClickListener(v -> downloadPhotoStrip());
         updateCaptureButtonText();
     }
 
     private void startCamera() {
         ListenableFuture<ProcessCameraProvider> cameraProviderFuture = ProcessCameraProvider.getInstance(this);
-
         cameraProviderFuture.addListener(() -> {
             try {
                 cameraProvider = cameraProviderFuture.get();
@@ -122,32 +137,20 @@ public class MainActivity extends AppCompatActivity {
             Log.e(TAG, "Camera provider is null");
             return;
         }
-
         cameraProvider.unbindAll();
-
         CameraSelector cameraSelector = new CameraSelector.Builder()
                 .requireLensFacing(isFrontCamera ? CameraSelector.LENS_FACING_FRONT : CameraSelector.LENS_FACING_BACK)
                 .build();
-
         Preview preview = new Preview.Builder().build();
         preview.setSurfaceProvider(previewView.getSurfaceProvider());
-
         ImageAnalysis imageAnalysis = new ImageAnalysis.Builder()
-                .setTargetResolution(new Size(640, 480)) // Keep this consistent if FaceOverlayView relies on its specific dimensions
+                .setTargetResolution(new Size(640, 480))
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                 .build();
-        // Pass the PreviewView's dimensions to FaceOverlayView if it needs to know its own display size for onDraw
-        // However, FaceOverlayView uses getWidth()/getHeight() which is fine.
-        // The crucial part is that FaceOverlayView knows the imageAnalysis dimensions (imageWidth, imageHeight)
         imageAnalysis.setAnalyzer(cameraExecutor, new FaceEmotionAnalyzer(faceOverlayView, isFrontCamera));
-
-
         imageCapture = new ImageCapture.Builder()
                 .setTargetRotation(previewView.getDisplay().getRotation())
-                // Consider setting target resolution for ImageCapture if consistency with ImageAnalysis is critical
-                // .setTargetResolution(new Size(640, 480)) // Or higher for better quality captures
                 .build();
-
         try {
             cameraProvider.bindToLifecycle(this, cameraSelector, preview, imageAnalysis, imageCapture);
             Log.d(TAG, "Camera use cases bound successfully.");
@@ -163,59 +166,34 @@ public class MainActivity extends AppCompatActivity {
             Toast.makeText(this, getString(R.string.camera_not_ready_toast), Toast.LENGTH_SHORT).show();
             return;
         }
-
         if (capturedImages.size() >= MAX_PHOTOS) {
             resetPhotoStrip();
             return;
         }
-
         imageCapture.takePicture(
                 ContextCompat.getMainExecutor(this),
                 new ImageCapture.OnImageCapturedCallback() {
                     @Override
                     public void onCaptureSuccess(@NonNull ImageProxy imageProxy) {
                         Log.d(TAG, "Photo capture succeeded. Image dimensions: " + imageProxy.getWidth() + "x" + imageProxy.getHeight() + ", Rotation: " + imageProxy.getImageInfo().getRotationDegrees());
-                        Bitmap cameraBitmap = imageProxyToBitmap(imageProxy); // This handles rotation
-
+                        Bitmap cameraBitmap = imageProxyToBitmap(imageProxy);
                         if (cameraBitmap != null) {
                             Bitmap finalBitmapWithFilter;
-
-                            // Create a mutable bitmap to draw on
                             Bitmap mutableCameraBitmap = cameraBitmap.copy(Bitmap.Config.ARGB_8888, true);
                             Canvas canvas = new Canvas(mutableCameraBitmap);
-
-                            // Flip the canvas for front camera before drawing the overlay if the overlay itself isn't flipped
-                            // However, it's better to flip the cameraBitmap itself if needed, then draw overlay.
-                            // The imageProxyToBitmap already handles rotation.
-                            // Flipping for front camera should apply to the base image.
-
                             Bitmap baseBitmapForOverlay = mutableCameraBitmap;
                             if (isFrontCamera) {
                                 Matrix matrix = new Matrix();
-                                matrix.preScale(-1.0f, 1.0f); // Horizontal flip
-                                // CORRECTED TYPO HERE: mutableCameraBaps -> mutableCameraBitmap
+                                matrix.preScale(-1.0f, 1.0f);
                                 baseBitmapForOverlay = Bitmap.createBitmap(mutableCameraBitmap, 0, 0, mutableCameraBitmap.getWidth(), mutableCameraBitmap.getHeight(), matrix, true);
-                                // Redraw the flipped base onto the canvas if we are reusing mutableCameraBitmap
-                                // The canvas is associated with mutableCameraBitmap. If baseBitmapForOverlay is a new bitmap (which it is after createBitmap),
-                                // we should draw onto the canvas associated with the bitmap we intend to use or create a new canvas for the new bitmap.
-                                // For simplicity, let's ensure the canvas for drawing the overlay is on the correctly oriented bitmap.
-                                canvas.setBitmap(baseBitmapForOverlay); // Set canvas to draw on the (potentially new) flipped bitmap
+                                canvas.setBitmap(baseBitmapForOverlay);
                             }
-
-
-                            // Draw the overlay using the captured image's dimensions as the target.
-                            // FaceOverlayView will use its internally stored FaceData.
-                            // The coordinates in FaceData are relative to the ImageAnalysis stream dimensions.
-                            // FaceOverlayView's new method needs to scale from ImageAnalysis dimensions to CapturedImage dimensions.
                             Log.d(TAG, "Drawing filters on canvas. Target (Canvas) W: " + canvas.getWidth() + " H: " + canvas.getHeight());
                             faceOverlayView.drawFiltersOnCanvas(canvas, canvas.getWidth(), canvas.getHeight(), isFrontCamera);
-
                             finalBitmapWithFilter = baseBitmapForOverlay;
-
                             capturedImages.add(finalBitmapWithFilter);
                             updateThumbnails();
                             updateCaptureButtonText();
-
                             if (capturedImages.size() == MAX_PHOTOS) {
                                 generateAndDisplayPhotoStrip();
                             }
@@ -225,7 +203,6 @@ public class MainActivity extends AppCompatActivity {
                         }
                         imageProxy.close();
                     }
-
                     @Override
                     public void onError(@NonNull ImageCaptureException exception) {
                         Log.e(TAG, "Photo capture failed: " + exception.getMessage(), exception);
@@ -235,20 +212,16 @@ public class MainActivity extends AppCompatActivity {
         );
     }
 
-
     private Bitmap imageProxyToBitmap(ImageProxy image) {
         ImageProxy.PlaneProxy planeProxy = image.getPlanes()[0];
         ByteBuffer buffer = planeProxy.getBuffer();
         byte[] bytes = new byte[buffer.remaining()];
         buffer.get(bytes);
         Bitmap bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
-
-        // Apply rotation to make the image upright
         Matrix matrix = new Matrix();
         matrix.postRotate(image.getImageInfo().getRotationDegrees());
         return Bitmap.createBitmap(bitmap, 0, 0, bitmap.getWidth(), bitmap.getHeight(), matrix, true);
     }
-
 
     private void updateThumbnails() {
         for (int i = 0; i < MAX_PHOTOS; i++) {
@@ -275,52 +248,43 @@ public class MainActivity extends AppCompatActivity {
         if (capturedImages.size() != MAX_PHOTOS) {
             return;
         }
-
         int stripWidth = 0;
         int totalHeight = 0;
-        // Let's aim for a consistent width for the photostrip images, e.g., 150dp or calculate based on screen.
-        // For simplicity, let's use a fixed width for each image in the strip.
-        int singleImageDisplayWidth = 300; // pixels, adjust as needed
+        int singleImageDisplayWidth = 300;
         List<Bitmap> scaledImages = new ArrayList<>();
-
         for (Bitmap originalBitmap : capturedImages) {
             if (originalBitmap == null) continue;
-
             int originalWidth = originalBitmap.getWidth();
             int originalHeight = originalBitmap.getHeight();
-            float aspectRatio = (float) originalHeight / originalWidth; // height / width
-
+            float aspectRatio = (float) originalHeight / originalWidth;
             int scaledWidth = singleImageDisplayWidth;
             int scaledHeight = (int) (scaledWidth * aspectRatio);
-
             Bitmap scaledBitmap = Bitmap.createScaledBitmap(originalBitmap, scaledWidth, scaledHeight, true);
             scaledImages.add(scaledBitmap);
-
-            if (scaledBitmap.getWidth() > stripWidth) { // Should be same if using fixed width
+            if (scaledBitmap.getWidth() > stripWidth) {
                 stripWidth = scaledBitmap.getWidth();
             }
             totalHeight += scaledBitmap.getHeight();
         }
-
         if (scaledImages.isEmpty()) {
             Log.e(TAG, "No images to create photostrip");
+            currentPhotoStripBitmap = null;
+            downloadButton.setVisibility(View.GONE);
             return;
         }
-
-        Bitmap photoStripBitmap = Bitmap.createBitmap(stripWidth, totalHeight, Bitmap.Config.ARGB_8888);
-        Canvas canvas = new Canvas(photoStripBitmap);
+        currentPhotoStripBitmap = Bitmap.createBitmap(stripWidth, totalHeight, Bitmap.Config.ARGB_8888);
+        Canvas canvas = new Canvas(currentPhotoStripBitmap);
         canvas.drawColor(Color.WHITE);
-
         int currentY = 0;
         for (Bitmap img : scaledImages) {
             if (img == null) continue;
-            float leftOffset = (stripWidth - img.getWidth()) / 2f; // Should be 0 if all same width
+            float leftOffset = (stripWidth - img.getWidth()) / 2f;
             canvas.drawBitmap(img, leftOffset, currentY, null);
             currentY += img.getHeight();
         }
-
-        photoStripImageView.setImageBitmap(photoStripBitmap);
+        photoStripImageView.setImageBitmap(currentPhotoStripBitmap);
         photoStripImageView.setVisibility(View.VISIBLE);
+        downloadButton.setVisibility(View.VISIBLE);
         Toast.makeText(this, getString(R.string.photostrip_created_toast), Toast.LENGTH_SHORT).show();
     }
 
@@ -331,21 +295,85 @@ public class MainActivity extends AppCompatActivity {
             }
         }
         capturedImages.clear();
-
+        if (currentPhotoStripBitmap != null && !currentPhotoStripBitmap.isRecycled()) {
+            currentPhotoStripBitmap.recycle();
+        }
+        currentPhotoStripBitmap = null;
         for(ImageView iv : thumbnailImageViews) {
             iv.setImageBitmap(null);
             iv.setBackgroundColor(ContextCompat.getColor(this, android.R.color.darker_gray));
         }
         photoStripImageView.setImageBitmap(null);
         photoStripImageView.setVisibility(View.GONE);
+        downloadButton.setVisibility(View.GONE);
         updateCaptureButtonText();
         Log.d(TAG, "Photostrip reset.");
     }
 
+    private void downloadPhotoStrip() {
+        if (currentPhotoStripBitmap == null) {
+            Toast.makeText(this, getString(R.string.photostrip_saved_failed) + " (No image)", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q &&
+                ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+            ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE}, REQUEST_CODE_STORAGE_PERMISSION);
+        } else {
+            savePhotoStripToGallery();
+        }
+    }
 
-    private boolean allPermissionsGranted() {
-        for (String permission : REQUIRED_PERMISSIONS) {
-            if (ContextCompat.checkSelfPermission(this, permission) != PackageManager.PERMISSION_GRANTED) {
+    private void savePhotoStripToGallery() {
+        if (currentPhotoStripBitmap == null) {
+            Toast.makeText(this, getString(R.string.photostrip_saved_failed) + " (Bitmap is null)", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        String imageFileName = "PhotoStrip_" + new SimpleDateFormat(FILENAME_FORMAT, Locale.US).format(System.currentTimeMillis()) + ".jpg";
+        ContentValues values = new ContentValues();
+        values.put(MediaStore.Images.Media.DISPLAY_NAME, imageFileName);
+        values.put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg");
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            values.put(MediaStore.Images.Media.RELATIVE_PATH, Environment.DIRECTORY_PICTURES + File.separator + "AREmotionFilters");
+            values.put(MediaStore.Images.Media.IS_PENDING, 1);
+        }
+        Uri imageUri = getContentResolver().insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values);
+        if (imageUri != null) {
+            try (OutputStream outputStream = getContentResolver().openOutputStream(imageUri)) {
+                if (outputStream != null) {
+                    currentPhotoStripBitmap.compress(Bitmap.CompressFormat.JPEG, 90, outputStream);
+                    Toast.makeText(this, getString(R.string.photostrip_saved_success), Toast.LENGTH_LONG).show();
+                } else {
+                    throw new IOException("Failed to get output stream.");
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    values.clear();
+                    values.put(MediaStore.Images.Media.IS_PENDING, 0);
+                    getContentResolver().update(imageUri, values, null, null);
+                }
+            } catch (IOException e) {
+                Log.e(TAG, "Failed to save photostrip: " + e.getMessage(), e);
+                Toast.makeText(this, getString(R.string.photostrip_saved_failed), Toast.LENGTH_LONG).show();
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    try {
+                        getContentResolver().delete(imageUri, null, null);
+                    } catch (Exception ex) {
+                        Log.e(TAG, "Failed to delete pending image entry: " + ex.getMessage());
+                    }
+                }
+            }
+        } else {
+            Log.e(TAG, "Failed to create MediaStore entry.");
+            Toast.makeText(this, getString(R.string.photostrip_saved_failed), Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private boolean allRequiredPermissionsGranted() {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            return false;
+        }
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            if (Arrays.asList(REQUIRED_PERMISSIONS).contains(Manifest.permission.WRITE_EXTERNAL_STORAGE) &&
+                    ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
                 return false;
             }
         }
@@ -356,11 +384,16 @@ public class MainActivity extends AppCompatActivity {
     public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
         if (requestCode == REQUEST_CODE_PERMISSIONS) {
-            if (allPermissionsGranted()) {
+            if (allRequiredPermissionsGranted()) {
                 startCamera();
             } else {
                 Toast.makeText(this, getString(R.string.permissions_not_granted_toast), Toast.LENGTH_SHORT).show();
-                finish();
+            }
+        } else if (requestCode == REQUEST_CODE_STORAGE_PERMISSION) {
+            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                savePhotoStripToGallery();
+            } else {
+                Toast.makeText(this, getString(R.string.storage_permission_required), Toast.LENGTH_LONG).show();
             }
         }
     }
@@ -378,5 +411,9 @@ public class MainActivity extends AppCompatActivity {
             }
         }
         capturedImages.clear();
+        if (currentPhotoStripBitmap != null && !currentPhotoStripBitmap.isRecycled()) {
+            currentPhotoStripBitmap.recycle();
+        }
+        currentPhotoStripBitmap = null;
     }
 }

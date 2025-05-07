@@ -88,7 +88,7 @@
             android:id="@+id/captureButton"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Take Picture (0/4)"
+            android:text="@string/take_picture_count"
             android:layout_marginBottom="8dp"/>
 
         <ImageView
@@ -99,6 +99,14 @@
             android:background="#333333"
             android:visibility="gone"
             android:contentDescription="Photostrip"/>
+
+        <Button
+            android:id="@+id/downloadButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/download_photostrip"
+            android:layout_marginTop="8dp"
+            android:visibility="gone"/>
     </LinearLayout>
 
 </androidx.constraintlayout.widget.ConstraintLayout>

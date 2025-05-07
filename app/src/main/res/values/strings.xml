@@ -9,5 +9,8 @@
     <string name="error_starting_camera_toast">Error starting camera</string>
     <string name="could_not_bind_camera_use_cases_toast">Could not bind camera use cases.</string>
     <string name="permissions_not_granted_toast">Permissions not granted by the user.</string>
-
+    <string name="download_photostrip">Download Photostrip</string>
+    <string name="photostrip_saved_success">Photostrip saved to Gallery!</string>
+    <string name="photostrip_saved_failed">Failed to save photostrip.</string>
+    <string name="storage_permission_required">Storage permission is required to save the image.</string>
 </resources>
